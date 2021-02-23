@@ -1,4 +1,4 @@
 baseURL = "https://coderzzp.github.io/blog/"
 languageCode = "en-us"
-title = "My New Hugo Site"
+title = "zzp的博客"
 theme = "ananke"
