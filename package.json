@@ -7,10 +7,12 @@
     "doc": "docs"
   },
   "scripts": {
-    "start":"hugo server -D",
-    "build":"hugo -d docs"
+    "start": "hugo server -D",
+    "build": "hugo -d docs"
   },
-  "pre-push": ["build"],
+  "pre-push": [
+    "build"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/coderzzp/blog.git"
@@ -20,5 +22,8 @@
   "bugs": {
     "url": "https://github.com/coderzzp/blog/issues"
   },
-  "homepage": "https://github.com/coderzzp/blog#readme"
+  "homepage": "https://github.com/coderzzp/blog#readme",
+  "devDependencies": {
+    "pre-push": "npm:undefined@*"
+  }
 }
