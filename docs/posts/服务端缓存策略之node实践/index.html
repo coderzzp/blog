@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    
+    <title>服务端缓存策略之node实践 | zzp的博客</title>
+    <meta name="viewport" content="width=device-width,minimum-scale=1">
+    <meta name="description" content="浏览器缓存策略之node实战 浏览器缓存是web开发中减少服务器压力相当常见也是相当有效的一种方式，那么本文会总结浏览器缓存的主要策略，并且最后会给出一个带缓存的node服务器代码实践。
+浏览器缓存策略讲解 以下讲解全部基于服务器端支持缓存策略，若不支持，则每次都会想服务端发起请求，即不存在缓存 第一次访问某个网站的时候： 浏览器会缓存这个响应的所有信息
+之后再次访问这个网站的时候：会判断是否命中强缓存（根据expiress和cache-control），如果命中强缓存，会直接读取之前缓存过的资源，如果未命中强缓存，那么执行弱缓存策略，回头看一下我们之前缓存过的请求头中，Etag和Last-modified两个字段，我们的浏览器会将这两个缓存过的头放在请求头中，但是这个时候Etag变成了If-none-match，Last-modified变成了If-modified-since，服务器收到请求后会根据这两个字段判断请求的资源是否新鲜（即是否有改动），如果新鲜，返回304，如果不新鲜，则获取新资源，返回200. 浏览器把缓存类型根据是否需要向服务器发起请求分为两种：强缓存和弱缓存（协商缓存）
+   缓存类型 获取资源方式 状态码 是否发送请求到服务器     强缓存 从缓存取 200(from disk cache) 否，直接从缓存取   弱缓存 从缓存去取 304(not modified) 是，通过服务器来告诉浏览器缓存是否可用     强缓存详解  expires，这是http1.0时的规范；它的值为一个绝对时间的GMT格式的时间字符串，如Mon, 10 Jun 2015 21:31:12 GMT，如果发送请求的时间在expires之前，那么本地缓存始终有效，否则就会发送请求到服务器来获取资源 cache-control：max-age=number，这是http1.1时出现的header信息，主要是利用该字段的max-age值来进行判断，它是一个相对值；资源第一次的请求时间和Cache-Control设定的有效期，计算出一个资源过期时间，再拿这个过期时间跟当前的请求时间比较，如果请求时间在过期时间之前，就能命中缓存，否则就不行；cache-control除了该字段外，还有下面几个比较常用的设置值：   no-cache：不使用本地缓存。需要使用缓存协商，先与服务器确认返回的响应是否被更改，如果之前的响应中存在ETag，那么请求的时候会与服务端验证，如果资源未被更改，则可以避免重新下载。
+  no-store：直接禁止游览器缓存数据，每次用户请求该资源，都会向服务器发送一个请求，每次都会下载完整的资源。
+  public：可以被所有的用户缓存，包括终端用户和CDN等中间代理服务器。
+  private：只能被终端用户的浏览器缓存，不允许CDN等中继缓存服务器对其缓存。
+ ps：如果cache-control与expires同时存在的话，cache-control的优先级高于expires      弱缓存详解 弱缓存都是由服务器来确定缓存资源是否可用的，所以客户端与服务器端要通过某种标识来进行通信，从而让服务器判断请求资源是否可以缓存访问，这主要涉及到下面两组header字段，这两组搭档都是成对出现的，即第一次请求的响应头带上某个字段（Last-Modified或者Etag），则后续请求则会带上对应的请求字段（If-Modified-Since或者If-None-Match），若响应头没有Last-Modified或者Etag字段，则请求头也不会有对应的字段。
+ Last-Modified/If-Modified-Since  浏览器第一次跟服务器请求一个资源，服务器在返回这个资源的同时，在respone的header加上Last-Modified的header，这个header表示这个资源在服务器上的最后修改时间 浏览器再次跟服务器请求这个资源时，在request的header上加上If-Modified-Since的header，这个header的值就是上一次请求时返回的Last-Modified的值 服务器再次收到资源请求时，根据浏览器传过来If-Modified-Since和资源在服务器上的最后修改时间判断资源是否有变化，如果没有变化则返回304 Not Modified，但是不会返回资源内容；如果有变化，就正常返回资源内容。当服务器返回304 Not Modified的响应时，response header中不会再添加Last-Modified的header，因为既然资源没有变化，那么Last-Modified也就不会改变，这是服务器返回304时的response header 浏览器收到304的响应后，就会从缓存中加载资源 如果协商缓存没有命中，浏览器直接从服务器加载资源时，Last-Modified的Header在重新加载的时候会被更新，下次请求时，If-Modified-Since会启用上次返回的Last-Modified值   Etag/If-None-Match：这两个值是由服务器生成的每个资源的唯一标识字符串，只要资源有变化就这个值就会改变；其判断过程与Last-Modified/If-Modified-Since类似，与Last-Modified不一样的是，当服务器返回304 Not Modified的响应时，由于ETag重新生成过，response header中还会把这个ETag返回，即使这个ETag跟之前的没有变化。  Etag相对Last-modified的区别   一些文件也许会周期性的更改，但是他的内容并不改变(仅仅改变的修改时间)，这个时候我们并不希望客户端认为这个文件被修改了，而重新GET；">
+    <meta name="generator" content="Hugo 0.80.0" />
+    
+    
+      <META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW">
+    
+
+    
+
+  
+  
+    <link rel="stylesheet" href="/blog/ananke/dist/main.css_5c99d70a7725bacd4c701e995b969fea.css" >
+  
+
+
+
+
+    
+      
+
+    
+
+    
+    
+    <meta property="og:title" content="服务端缓存策略之node实践" />
+<meta property="og:description" content="浏览器缓存策略之node实战 浏览器缓存是web开发中减少服务器压力相当常见也是相当有效的一种方式，那么本文会总结浏览器缓存的主要策略，并且最后会给出一个带缓存的node服务器代码实践。
+浏览器缓存策略讲解 以下讲解全部基于服务器端支持缓存策略，若不支持，则每次都会想服务端发起请求，即不存在缓存 第一次访问某个网站的时候： 浏览器会缓存这个响应的所有信息
+之后再次访问这个网站的时候：会判断是否命中强缓存（根据expiress和cache-control），如果命中强缓存，会直接读取之前缓存过的资源，如果未命中强缓存，那么执行弱缓存策略，回头看一下我们之前缓存过的请求头中，Etag和Last-modified两个字段，我们的浏览器会将这两个缓存过的头放在请求头中，但是这个时候Etag变成了If-none-match，Last-modified变成了If-modified-since，服务器收到请求后会根据这两个字段判断请求的资源是否新鲜（即是否有改动），如果新鲜，返回304，如果不新鲜，则获取新资源，返回200. 浏览器把缓存类型根据是否需要向服务器发起请求分为两种：强缓存和弱缓存（协商缓存）
+   缓存类型 获取资源方式 状态码 是否发送请求到服务器     强缓存 从缓存取 200(from disk cache) 否，直接从缓存取   弱缓存 从缓存去取 304(not modified) 是，通过服务器来告诉浏览器缓存是否可用     强缓存详解  expires，这是http1.0时的规范；它的值为一个绝对时间的GMT格式的时间字符串，如Mon, 10 Jun 2015 21:31:12 GMT，如果发送请求的时间在expires之前，那么本地缓存始终有效，否则就会发送请求到服务器来获取资源 cache-control：max-age=number，这是http1.1时出现的header信息，主要是利用该字段的max-age值来进行判断，它是一个相对值；资源第一次的请求时间和Cache-Control设定的有效期，计算出一个资源过期时间，再拿这个过期时间跟当前的请求时间比较，如果请求时间在过期时间之前，就能命中缓存，否则就不行；cache-control除了该字段外，还有下面几个比较常用的设置值：   no-cache：不使用本地缓存。需要使用缓存协商，先与服务器确认返回的响应是否被更改，如果之前的响应中存在ETag，那么请求的时候会与服务端验证，如果资源未被更改，则可以避免重新下载。
+  no-store：直接禁止游览器缓存数据，每次用户请求该资源，都会向服务器发送一个请求，每次都会下载完整的资源。
+  public：可以被所有的用户缓存，包括终端用户和CDN等中间代理服务器。
+  private：只能被终端用户的浏览器缓存，不允许CDN等中继缓存服务器对其缓存。
+ ps：如果cache-control与expires同时存在的话，cache-control的优先级高于expires      弱缓存详解 弱缓存都是由服务器来确定缓存资源是否可用的，所以客户端与服务器端要通过某种标识来进行通信，从而让服务器判断请求资源是否可以缓存访问，这主要涉及到下面两组header字段，这两组搭档都是成对出现的，即第一次请求的响应头带上某个字段（Last-Modified或者Etag），则后续请求则会带上对应的请求字段（If-Modified-Since或者If-None-Match），若响应头没有Last-Modified或者Etag字段，则请求头也不会有对应的字段。
+ Last-Modified/If-Modified-Since  浏览器第一次跟服务器请求一个资源，服务器在返回这个资源的同时，在respone的header加上Last-Modified的header，这个header表示这个资源在服务器上的最后修改时间 浏览器再次跟服务器请求这个资源时，在request的header上加上If-Modified-Since的header，这个header的值就是上一次请求时返回的Last-Modified的值 服务器再次收到资源请求时，根据浏览器传过来If-Modified-Since和资源在服务器上的最后修改时间判断资源是否有变化，如果没有变化则返回304 Not Modified，但是不会返回资源内容；如果有变化，就正常返回资源内容。当服务器返回304 Not Modified的响应时，response header中不会再添加Last-Modified的header，因为既然资源没有变化，那么Last-Modified也就不会改变，这是服务器返回304时的response header 浏览器收到304的响应后，就会从缓存中加载资源 如果协商缓存没有命中，浏览器直接从服务器加载资源时，Last-Modified的Header在重新加载的时候会被更新，下次请求时，If-Modified-Since会启用上次返回的Last-Modified值   Etag/If-None-Match：这两个值是由服务器生成的每个资源的唯一标识字符串，只要资源有变化就这个值就会改变；其判断过程与Last-Modified/If-Modified-Since类似，与Last-Modified不一样的是，当服务器返回304 Not Modified的响应时，由于ETag重新生成过，response header中还会把这个ETag返回，即使这个ETag跟之前的没有变化。  Etag相对Last-modified的区别   一些文件也许会周期性的更改，但是他的内容并不改变(仅仅改变的修改时间)，这个时候我们并不希望客户端认为这个文件被修改了，而重新GET；" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://coderzzp.github.io/blog/posts/%E6%9C%8D%E5%8A%A1%E7%AB%AF%E7%BC%93%E5%AD%98%E7%AD%96%E7%95%A5%E4%B9%8Bnode%E5%AE%9E%E8%B7%B5/" />
+<meta property="article:published_time" content="2021-02-23T14:02:36+08:00" />
+<meta property="article:modified_time" content="2021-02-23T14:02:36+08:00" />
+<meta itemprop="name" content="服务端缓存策略之node实践">
+<meta itemprop="description" content="浏览器缓存策略之node实战 浏览器缓存是web开发中减少服务器压力相当常见也是相当有效的一种方式，那么本文会总结浏览器缓存的主要策略，并且最后会给出一个带缓存的node服务器代码实践。
+浏览器缓存策略讲解 以下讲解全部基于服务器端支持缓存策略，若不支持，则每次都会想服务端发起请求，即不存在缓存 第一次访问某个网站的时候： 浏览器会缓存这个响应的所有信息
+之后再次访问这个网站的时候：会判断是否命中强缓存（根据expiress和cache-control），如果命中强缓存，会直接读取之前缓存过的资源，如果未命中强缓存，那么执行弱缓存策略，回头看一下我们之前缓存过的请求头中，Etag和Last-modified两个字段，我们的浏览器会将这两个缓存过的头放在请求头中，但是这个时候Etag变成了If-none-match，Last-modified变成了If-modified-since，服务器收到请求后会根据这两个字段判断请求的资源是否新鲜（即是否有改动），如果新鲜，返回304，如果不新鲜，则获取新资源，返回200. 浏览器把缓存类型根据是否需要向服务器发起请求分为两种：强缓存和弱缓存（协商缓存）
+   缓存类型 获取资源方式 状态码 是否发送请求到服务器     强缓存 从缓存取 200(from disk cache) 否，直接从缓存取   弱缓存 从缓存去取 304(not modified) 是，通过服务器来告诉浏览器缓存是否可用     强缓存详解  expires，这是http1.0时的规范；它的值为一个绝对时间的GMT格式的时间字符串，如Mon, 10 Jun 2015 21:31:12 GMT，如果发送请求的时间在expires之前，那么本地缓存始终有效，否则就会发送请求到服务器来获取资源 cache-control：max-age=number，这是http1.1时出现的header信息，主要是利用该字段的max-age值来进行判断，它是一个相对值；资源第一次的请求时间和Cache-Control设定的有效期，计算出一个资源过期时间，再拿这个过期时间跟当前的请求时间比较，如果请求时间在过期时间之前，就能命中缓存，否则就不行；cache-control除了该字段外，还有下面几个比较常用的设置值：   no-cache：不使用本地缓存。需要使用缓存协商，先与服务器确认返回的响应是否被更改，如果之前的响应中存在ETag，那么请求的时候会与服务端验证，如果资源未被更改，则可以避免重新下载。
+  no-store：直接禁止游览器缓存数据，每次用户请求该资源，都会向服务器发送一个请求，每次都会下载完整的资源。
+  public：可以被所有的用户缓存，包括终端用户和CDN等中间代理服务器。
+  private：只能被终端用户的浏览器缓存，不允许CDN等中继缓存服务器对其缓存。
+ ps：如果cache-control与expires同时存在的话，cache-control的优先级高于expires      弱缓存详解 弱缓存都是由服务器来确定缓存资源是否可用的，所以客户端与服务器端要通过某种标识来进行通信，从而让服务器判断请求资源是否可以缓存访问，这主要涉及到下面两组header字段，这两组搭档都是成对出现的，即第一次请求的响应头带上某个字段（Last-Modified或者Etag），则后续请求则会带上对应的请求字段（If-Modified-Since或者If-None-Match），若响应头没有Last-Modified或者Etag字段，则请求头也不会有对应的字段。
+ Last-Modified/If-Modified-Since  浏览器第一次跟服务器请求一个资源，服务器在返回这个资源的同时，在respone的header加上Last-Modified的header，这个header表示这个资源在服务器上的最后修改时间 浏览器再次跟服务器请求这个资源时，在request的header上加上If-Modified-Since的header，这个header的值就是上一次请求时返回的Last-Modified的值 服务器再次收到资源请求时，根据浏览器传过来If-Modified-Since和资源在服务器上的最后修改时间判断资源是否有变化，如果没有变化则返回304 Not Modified，但是不会返回资源内容；如果有变化，就正常返回资源内容。当服务器返回304 Not Modified的响应时，response header中不会再添加Last-Modified的header，因为既然资源没有变化，那么Last-Modified也就不会改变，这是服务器返回304时的response header 浏览器收到304的响应后，就会从缓存中加载资源 如果协商缓存没有命中，浏览器直接从服务器加载资源时，Last-Modified的Header在重新加载的时候会被更新，下次请求时，If-Modified-Since会启用上次返回的Last-Modified值   Etag/If-None-Match：这两个值是由服务器生成的每个资源的唯一标识字符串，只要资源有变化就这个值就会改变；其判断过程与Last-Modified/If-Modified-Since类似，与Last-Modified不一样的是，当服务器返回304 Not Modified的响应时，由于ETag重新生成过，response header中还会把这个ETag返回，即使这个ETag跟之前的没有变化。  Etag相对Last-modified的区别   一些文件也许会周期性的更改，但是他的内容并不改变(仅仅改变的修改时间)，这个时候我们并不希望客户端认为这个文件被修改了，而重新GET；">
+<meta itemprop="datePublished" content="2021-02-23T14:02:36+08:00" />
+<meta itemprop="dateModified" content="2021-02-23T14:02:36+08:00" />
+<meta itemprop="wordCount" content="162">
+
+
+
+<meta itemprop="keywords" content="" />
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="服务端缓存策略之node实践"/>
+<meta name="twitter:description" content="浏览器缓存策略之node实战 浏览器缓存是web开发中减少服务器压力相当常见也是相当有效的一种方式，那么本文会总结浏览器缓存的主要策略，并且最后会给出一个带缓存的node服务器代码实践。
+浏览器缓存策略讲解 以下讲解全部基于服务器端支持缓存策略，若不支持，则每次都会想服务端发起请求，即不存在缓存 第一次访问某个网站的时候： 浏览器会缓存这个响应的所有信息
+之后再次访问这个网站的时候：会判断是否命中强缓存（根据expiress和cache-control），如果命中强缓存，会直接读取之前缓存过的资源，如果未命中强缓存，那么执行弱缓存策略，回头看一下我们之前缓存过的请求头中，Etag和Last-modified两个字段，我们的浏览器会将这两个缓存过的头放在请求头中，但是这个时候Etag变成了If-none-match，Last-modified变成了If-modified-since，服务器收到请求后会根据这两个字段判断请求的资源是否新鲜（即是否有改动），如果新鲜，返回304，如果不新鲜，则获取新资源，返回200. 浏览器把缓存类型根据是否需要向服务器发起请求分为两种：强缓存和弱缓存（协商缓存）
+   缓存类型 获取资源方式 状态码 是否发送请求到服务器     强缓存 从缓存取 200(from disk cache) 否，直接从缓存取   弱缓存 从缓存去取 304(not modified) 是，通过服务器来告诉浏览器缓存是否可用     强缓存详解  expires，这是http1.0时的规范；它的值为一个绝对时间的GMT格式的时间字符串，如Mon, 10 Jun 2015 21:31:12 GMT，如果发送请求的时间在expires之前，那么本地缓存始终有效，否则就会发送请求到服务器来获取资源 cache-control：max-age=number，这是http1.1时出现的header信息，主要是利用该字段的max-age值来进行判断，它是一个相对值；资源第一次的请求时间和Cache-Control设定的有效期，计算出一个资源过期时间，再拿这个过期时间跟当前的请求时间比较，如果请求时间在过期时间之前，就能命中缓存，否则就不行；cache-control除了该字段外，还有下面几个比较常用的设置值：   no-cache：不使用本地缓存。需要使用缓存协商，先与服务器确认返回的响应是否被更改，如果之前的响应中存在ETag，那么请求的时候会与服务端验证，如果资源未被更改，则可以避免重新下载。
+  no-store：直接禁止游览器缓存数据，每次用户请求该资源，都会向服务器发送一个请求，每次都会下载完整的资源。
+  public：可以被所有的用户缓存，包括终端用户和CDN等中间代理服务器。
+  private：只能被终端用户的浏览器缓存，不允许CDN等中继缓存服务器对其缓存。
+ ps：如果cache-control与expires同时存在的话，cache-control的优先级高于expires      弱缓存详解 弱缓存都是由服务器来确定缓存资源是否可用的，所以客户端与服务器端要通过某种标识来进行通信，从而让服务器判断请求资源是否可以缓存访问，这主要涉及到下面两组header字段，这两组搭档都是成对出现的，即第一次请求的响应头带上某个字段（Last-Modified或者Etag），则后续请求则会带上对应的请求字段（If-Modified-Since或者If-None-Match），若响应头没有Last-Modified或者Etag字段，则请求头也不会有对应的字段。
+ Last-Modified/If-Modified-Since  浏览器第一次跟服务器请求一个资源，服务器在返回这个资源的同时，在respone的header加上Last-Modified的header，这个header表示这个资源在服务器上的最后修改时间 浏览器再次跟服务器请求这个资源时，在request的header上加上If-Modified-Since的header，这个header的值就是上一次请求时返回的Last-Modified的值 服务器再次收到资源请求时，根据浏览器传过来If-Modified-Since和资源在服务器上的最后修改时间判断资源是否有变化，如果没有变化则返回304 Not Modified，但是不会返回资源内容；如果有变化，就正常返回资源内容。当服务器返回304 Not Modified的响应时，response header中不会再添加Last-Modified的header，因为既然资源没有变化，那么Last-Modified也就不会改变，这是服务器返回304时的response header 浏览器收到304的响应后，就会从缓存中加载资源 如果协商缓存没有命中，浏览器直接从服务器加载资源时，Last-Modified的Header在重新加载的时候会被更新，下次请求时，If-Modified-Since会启用上次返回的Last-Modified值   Etag/If-None-Match：这两个值是由服务器生成的每个资源的唯一标识字符串，只要资源有变化就这个值就会改变；其判断过程与Last-Modified/If-Modified-Since类似，与Last-Modified不一样的是，当服务器返回304 Not Modified的响应时，由于ETag重新生成过，response header中还会把这个ETag返回，即使这个ETag跟之前的没有变化。  Etag相对Last-modified的区别   一些文件也许会周期性的更改，但是他的内容并不改变(仅仅改变的修改时间)，这个时候我们并不希望客户端认为这个文件被修改了，而重新GET；"/>
+
+	
+  </head>
+
+  <body class="ma0 avenir bg-near-white">
+
+    
+   
+  
+
+  <header>
+    <div class="bg-black">
+      <nav class="pv3 ph3 ph4-ns" role="navigation">
+  <div class="flex-l justify-between items-center center">
+    <a href="/blog/" class="f3 fw2 hover-white no-underline white-90 dib">
+      
+        zzp的博客
+      
+    </a>
+    <div class="flex-l items-center">
+      
+
+      
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    </div>
+  </div>
+</nav>
+
+    </div>
+  </header>
+
+
+
+    <main class="pb7" role="main">
+      
+  
+  <article class="flex-l flex-wrap justify-between mw8 center ph3">
+    <header class="mt4 w-100">
+      <aside class="instapaper_ignoref b helvetica tracked">
+          
+        POSTS
+      </aside>
+      
+
+
+
+
+  <div id="sharing" class="mt3">
+
+    
+    <a href="https://www.facebook.com/sharer.php?u=https://coderzzp.github.io/blog/posts/%E6%9C%8D%E5%8A%A1%E7%AB%AF%E7%BC%93%E5%AD%98%E7%AD%96%E7%95%A5%E4%B9%8Bnode%E5%AE%9E%E8%B7%B5/" class="facebook no-underline" aria-label="share on Facebook">
+      <svg height="32px"  style="enable-background:new 0 0 67 67;" version="1.1" viewBox="0 0 67 67" width="32px" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M28.765,50.32h6.744V33.998h4.499l0.596-5.624h-5.095  l0.007-2.816c0-1.466,0.14-2.253,2.244-2.253h2.812V17.68h-4.5c-5.405,0-7.307,2.729-7.307,7.317v3.377h-3.369v5.625h3.369V50.32z   M33,64C16.432,64,3,50.569,3,34S16.432,4,33,4s30,13.431,30,30S49.568,64,33,64z" style="fill-rule:evenodd;clip-rule:evenodd;"/></svg>
+
+    </a>
+
+    
+    
+    <a href="https://twitter.com/share?url=https://coderzzp.github.io/blog/posts/%E6%9C%8D%E5%8A%A1%E7%AB%AF%E7%BC%93%E5%AD%98%E7%AD%96%E7%95%A5%E4%B9%8Bnode%E5%AE%9E%E8%B7%B5/&amp;text=%e6%9c%8d%e5%8a%a1%e7%ab%af%e7%bc%93%e5%ad%98%e7%ad%96%e7%95%a5%e4%b9%8bnode%e5%ae%9e%e8%b7%b5" class="twitter no-underline" aria-label="share on Twitter">
+      <svg height="32px"  style="enable-background:new 0 0 67 67;" version="1.1" viewBox="0 0 67 67" width="32px" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M37.167,22.283c-2.619,0.953-4.274,3.411-4.086,6.101  l0.063,1.038l-1.048-0.127c-3.813-0.487-7.145-2.139-9.974-4.915l-1.383-1.377l-0.356,1.017c-0.754,2.267-0.272,4.661,1.299,6.271  c0.838,0.89,0.649,1.017-0.796,0.487c-0.503-0.169-0.943-0.296-0.985-0.233c-0.146,0.149,0.356,2.076,0.754,2.839  c0.545,1.06,1.655,2.097,2.871,2.712l1.027,0.487l-1.215,0.021c-1.173,0-1.215,0.021-1.089,0.467  c0.419,1.377,2.074,2.839,3.918,3.475l1.299,0.444l-1.131,0.678c-1.676,0.976-3.646,1.526-5.616,1.568  C19.775,43.256,19,43.341,19,43.405c0,0.211,2.557,1.397,4.044,1.864c4.463,1.377,9.765,0.783,13.746-1.568  c2.829-1.673,5.657-5,6.978-8.221c0.713-1.716,1.425-4.851,1.425-6.354c0-0.975,0.063-1.102,1.236-2.267  c0.692-0.678,1.341-1.419,1.467-1.631c0.21-0.403,0.188-0.403-0.88-0.043c-1.781,0.636-2.033,0.551-1.152-0.402  c0.649-0.678,1.425-1.907,1.425-2.267c0-0.063-0.314,0.042-0.671,0.233c-0.377,0.212-1.215,0.53-1.844,0.72l-1.131,0.361l-1.027-0.7  c-0.566-0.381-1.361-0.805-1.781-0.932C39.766,21.902,38.131,21.944,37.167,22.283z M33,64C16.432,64,3,50.569,3,34S16.432,4,33,4  s30,13.431,30,30S49.568,64,33,64z" style="fill-rule:evenodd;clip-rule:evenodd;fill:;"/></svg>
+
+    </a>
+
+    
+    <a href="https://www.linkedin.com/shareArticle?mini=true&amp;url=https://coderzzp.github.io/blog/posts/%E6%9C%8D%E5%8A%A1%E7%AB%AF%E7%BC%93%E5%AD%98%E7%AD%96%E7%95%A5%E4%B9%8Bnode%E5%AE%9E%E8%B7%B5/&amp;title=%e6%9c%8d%e5%8a%a1%e7%ab%af%e7%bc%93%e5%ad%98%e7%ad%96%e7%95%a5%e4%b9%8bnode%e5%ae%9e%e8%b7%b5" class="linkedin no-underline" aria-label="share on LinkedIn">
+      <svg  height="32px"  style="enable-background:new 0 0 65 65;" version="1.1" viewBox="0 0 65 65" width="32px" xml:space="preserve" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <path d="M50.837,48.137V36.425c0-6.275-3.35-9.195-7.816-9.195  c-3.604,0-5.219,1.983-6.119,3.374V27.71h-6.79c0.09,1.917,0,20.427,0,20.427h6.79V36.729c0-0.609,0.044-1.219,0.224-1.655  c0.49-1.22,1.607-2.483,3.482-2.483c2.458,0,3.44,1.873,3.44,4.618v10.929H50.837z M22.959,24.922c2.367,0,3.842-1.57,3.842-3.531  c-0.044-2.003-1.475-3.528-3.797-3.528s-3.841,1.524-3.841,3.528c0,1.961,1.474,3.531,3.753,3.531H22.959z M34,64  C17.432,64,4,50.568,4,34C4,17.431,17.432,4,34,4s30,13.431,30,30C64,50.568,50.568,64,34,64z M26.354,48.137V27.71h-6.789v20.427  H26.354z" style="fill-rule:evenodd;clip-rule:evenodd;fill:;"/>
+</svg>
+
+    </a>
+  </div>
+
+
+      <h1 class="f1 athelas mt3 mb1">服务端缓存策略之node实践</h1>
+      
+      
+      <time class="f6 mv4 dib tracked" datetime="2021-02-23T14:02:36+08:00">February 23, 2021</time>
+
+      
+      
+    </header>
+    <div class="nested-copy-line-height lh-copy serif f4 nested-links nested-img mid-gray pr4-l w-two-thirds-l"><h2 id="浏览器缓存策略之node实战">浏览器缓存策略之node实战</h2>
+<p>浏览器缓存是web开发中减少服务器压力相当常见也是相当有效的一种方式，那么本文会总结浏览器缓存的主要策略，并且最后会给出一个带缓存的node服务器代码实践。</p>
+<h3 id="浏览器缓存策略讲解">浏览器缓存策略讲解</h3>
+<p>以下讲解全部基于服务器端支持缓存策略，若不支持，则每次都会想服务端发起请求，即不存在缓存
+第一次访问某个网站的时候：
+<img src="https://user-images.githubusercontent.com/24691802/42408493-04ada050-8200-11e8-8558-bbbba00a6702.png" alt="image">
+浏览器会缓存这个响应的所有信息</p>
+<p>之后再次访问这个网站的时候：会判断是否命中强缓存（根据expiress和cache-control），如果命中强缓存，会直接读取之前缓存过的资源，如果未命中强缓存，那么执行弱缓存策略，回头看一下我们之前缓存过的请求头中，Etag和Last-modified两个字段，我们的浏览器会将这两个缓存过的头放在请求头中，但是这个时候Etag变成了If-none-match，Last-modified变成了If-modified-since，服务器收到请求后会根据这两个字段判断请求的资源是否新鲜（即是否有改动），如果新鲜，返回304，如果不新鲜，则获取新资源，返回200.
+<img src="https://user-images.githubusercontent.com/24691802/42408508-4b7b12a6-8200-11e8-8285-868c613f30d7.png" alt="image">
+浏览器把缓存类型根据是否需要向服务器发起请求分为两种：<strong>强缓存</strong>和<strong>弱缓存（协商缓存）</strong></p>
+<table>
+<thead>
+<tr>
+<th>缓存类型</th>
+<th>获取资源方式</th>
+<th>状态码</th>
+<th>是否发送请求到服务器</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>强缓存</td>
+<td>从缓存取</td>
+<td>200(from disk cache)</td>
+<td>否，直接从缓存取</td>
+</tr>
+<tr>
+<td>弱缓存</td>
+<td>从缓存去取</td>
+<td>304(not modified)</td>
+<td>是，通过服务器来告诉浏览器缓存是否可用</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h3 id="强缓存详解">强缓存详解</h3>
+<ul>
+<li>expires，这是http1.0时的规范；它的值为一个绝对时间的GMT格式的时间字符串，如Mon, 10 Jun 2015 21:31:12 GMT，如果发送请求的时间在expires之前，那么本地缓存始终有效，否则就会发送请求到服务器来获取资源</li>
+<li>cache-control：max-age=number，这是http1.1时出现的header信息，主要是利用该字段的max-age值来进行判断，它是一个相对值；资源第一次的请求时间和Cache-Control设定的有效期，计算出一个资源过期时间，再拿这个过期时间跟当前的请求时间比较，如果请求时间在过期时间之前，就能命中缓存，否则就不行；cache-control除了该字段外，还有下面几个比较常用的设置值：
+<ul>
+<li>
+<p>no-cache：不使用本地缓存。需要使用缓存协商，先与服务器确认返回的响应是否被更改，如果之前的响应中存在ETag，那么请求的时候会与服务端验证，如果资源未被更改，则可以避免重新下载。</p>
+</li>
+<li>
+<p>no-store：直接禁止游览器缓存数据，每次用户请求该资源，都会向服务器发送一个请求，每次都会下载完整的资源。</p>
+</li>
+<li>
+<p>public：可以被所有的用户缓存，包括终端用户和CDN等中间代理服务器。</p>
+</li>
+<li>
+<p>private：只能被终端用户的浏览器缓存，不允许CDN等中继缓存服务器对其缓存。</p>
+<pre><code>   ps：如果cache-control与expires同时存在的话，cache-control的优先级高于expires
+</code></pre>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="弱缓存详解">弱缓存详解</h3>
+<p>弱缓存都是由服务器来确定缓存资源是否可用的，所以客户端与服务器端要通过某种标识来进行通信，从而让服务器判断请求资源是否可以缓存访问，这主要涉及到下面两组header字段，这两组搭档都是成对出现的，即第一次请求的响应头带上某个字段（Last-Modified或者Etag），则后续请求则会带上对应的请求字段（If-Modified-Since或者If-None-Match），若响应头没有Last-Modified或者Etag字段，则请求头也不会有对应的字段。</p>
+<ul>
+<li>Last-Modified/If-Modified-Since
+<ul>
+<li>浏览器第一次跟服务器请求一个资源，服务器在返回这个资源的同时，在respone的header加上Last-Modified的header，这个header表示这个资源在服务器上的最后修改时间</li>
+<li>浏览器再次跟服务器请求这个资源时，在request的header上加上If-Modified-Since的header，这个header的值就是上一次请求时返回的Last-Modified的值</li>
+<li>服务器再次收到资源请求时，根据浏览器传过来If-Modified-Since和资源在服务器上的最后修改时间判断资源是否有变化，如果没有变化则返回304 Not Modified，但是不会返回资源内容；如果有变化，就正常返回资源内容。当服务器返回304 Not Modified的响应时，response header中不会再添加Last-Modified的header，因为既然资源没有变化，那么Last-Modified也就不会改变，这是服务器返回304时的response header</li>
+<li>浏览器收到304的响应后，就会从缓存中加载资源</li>
+<li>如果协商缓存没有命中，浏览器直接从服务器加载资源时，Last-Modified的Header在重新加载的时候会被更新，下次请求时，If-Modified-Since会启用上次返回的Last-Modified值</li>
+</ul>
+</li>
+<li>Etag/If-None-Match：这两个值是由服务器生成的每个资源的唯一标识字符串，只要资源有变化就这个值就会改变；其判断过程与Last-Modified/If-Modified-Since类似，与Last-Modified不一样的是，当服务器返回304 Not Modified的响应时，由于ETag重新生成过，response header中还会把这个ETag返回，即使这个ETag跟之前的没有变化。</li>
+</ul>
+<h3 id="etag相对last-modified的区别">Etag相对Last-modified的区别</h3>
+<ul>
+<li>
+<p>一些文件也许会周期性的更改，但是他的内容并不改变(仅仅改变的修改时间)，这个时候我们并不希望客户端认为这个文件被修改了，而重新GET；</p>
+</li>
+<li>
+<p>某些文件修改非常频繁，比如在秒以下的时间内进行修改，(比方说1s内修改了N次)，If-Modified-Since能 检查到的粒度是s级的，这种修改无法判断(或者说UNIX记录MTIME只能精确到秒)；</p>
+<pre><code>  ps：浏览器会优先验证Etag，在一致的情况下，才会继续判断Last-modified。
+</code></pre>
+</li>
+</ul>
+<h3 id="实战">实战</h3>
+<p>浏览器缓存主要是需要服务端去做处理，那我们这里大致介绍一下服务端的请求头设置，以及弱缓存判断是否新鲜的方式：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript"><span style="color:#a6e22e">setFreshHeaders</span>(<span style="color:#a6e22e">stat</span>, <span style="color:#a6e22e">res</span>) {
+      <span style="color:#75715e">//关于缓存可以在https://www.cnblogs.com/wonyun/p/5524617.html参考
+</span><span style="color:#75715e"></span>      <span style="color:#75715e">//从stat里拿到信息
+</span><span style="color:#75715e"></span>      <span style="color:#66d9ef">const</span> <span style="color:#a6e22e">lastModified</span> <span style="color:#f92672">=</span> <span style="color:#a6e22e">stat</span>.<span style="color:#a6e22e">mtime</span>.<span style="color:#a6e22e">toUTCString</span>();
+      <span style="color:#75715e">//强缓存
+</span><span style="color:#75715e"></span>      <span style="color:#66d9ef">if</span> (<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">enableExpires</span>) {
+          <span style="color:#66d9ef">const</span> <span style="color:#a6e22e">expireTime</span> <span style="color:#f92672">=</span> (<span style="color:#66d9ef">new</span> Date(Date.<span style="color:#a6e22e">now</span>() <span style="color:#f92672">+</span> <span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">maxAge</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">1000</span>)).<span style="color:#a6e22e">toUTCString</span>();
+          <span style="color:#a6e22e">res</span>.<span style="color:#a6e22e">setHeader</span>(<span style="color:#e6db74">&#39;Expires&#39;</span>, <span style="color:#a6e22e">expireTime</span>);
+      }
+      <span style="color:#66d9ef">if</span> (<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">enableCacheControl</span>) {
+          <span style="color:#a6e22e">res</span>.<span style="color:#a6e22e">setHeader</span>(<span style="color:#e6db74">&#39;Cache-Control&#39;</span>, <span style="color:#e6db74">`public, max-age=</span><span style="color:#e6db74">${</span><span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">maxAge</span><span style="color:#e6db74">}</span><span style="color:#e6db74">`</span>);
+      }
+      <span style="color:#75715e">//弱缓存
+</span><span style="color:#75715e"></span>      <span style="color:#66d9ef">if</span> (<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">enableLastModified</span>) {
+          <span style="color:#a6e22e">res</span>.<span style="color:#a6e22e">setHeader</span>(<span style="color:#e6db74">&#39;Last-Modified&#39;</span>, <span style="color:#a6e22e">lastModified</span>);
+      }
+      <span style="color:#66d9ef">if</span> (<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">enableETag</span>) {
+          <span style="color:#a6e22e">res</span>.<span style="color:#a6e22e">setHeader</span>(<span style="color:#e6db74">&#39;ETag&#39;</span>, <span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">generateETag</span>(<span style="color:#a6e22e">stat</span>));
+      }
+    }
+</code></pre></div><p>这里的stat是可以通过fs.stat()这个api取到资源文件的相关信息，res是传入的response对象。
+关于Etag的组成方式，通过查询mdn得到了这样的答案
+<img src="https://user-images.githubusercontent.com/24691802/42412445-07da69fe-823f-11e8-84fc-9acf9b61f15a.png" alt="image">
+我们这里使用的是最后修改事件戳的哈希值，实际上用文件内容的哈希会更加准确（原因参见etag和last-modified区别第一条）</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript"><span style="color:#75715e">//设置etag的一种简单方式
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">generateETag</span>(<span style="color:#a6e22e">stat</span>) {
+      <span style="color:#66d9ef">const</span> <span style="color:#a6e22e">mtime</span> <span style="color:#f92672">=</span> <span style="color:#a6e22e">stat</span>.<span style="color:#a6e22e">mtime</span>.<span style="color:#a6e22e">getTime</span>().<span style="color:#a6e22e">toString</span>(<span style="color:#ae81ff">16</span>);
+      <span style="color:#66d9ef">const</span> <span style="color:#a6e22e">size</span> <span style="color:#f92672">=</span> <span style="color:#a6e22e">stat</span>.<span style="color:#a6e22e">size</span>.<span style="color:#a6e22e">toString</span>(<span style="color:#ae81ff">16</span>);
+      <span style="color:#66d9ef">return</span> <span style="color:#e6db74">`W/&#34;</span><span style="color:#e6db74">${</span><span style="color:#a6e22e">size</span><span style="color:#e6db74">}</span><span style="color:#e6db74">-</span><span style="color:#e6db74">${</span><span style="color:#a6e22e">mtime</span><span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;`</span>;
+    }
+</code></pre></div><p>那么当服务器受到带有if-modified-since和if-none-match的请求时，会去判断资源是否新鲜，判断代码如下：</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript"><span style="color:#a6e22e">isFresh</span>(<span style="color:#a6e22e">reqHeaders</span>, <span style="color:#a6e22e">resHeaders</span>) {
+      <span style="color:#66d9ef">const</span>  <span style="color:#a6e22e">noneMatch</span> <span style="color:#f92672">=</span> <span style="color:#a6e22e">reqHeaders</span>[<span style="color:#e6db74">&#39;if-none-match&#39;</span>];
+      <span style="color:#66d9ef">const</span>  <span style="color:#a6e22e">lastModified</span> <span style="color:#f92672">=</span> <span style="color:#a6e22e">reqHeaders</span>[<span style="color:#e6db74">&#39;if-modified-since&#39;</span>];
+      <span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>(<span style="color:#a6e22e">noneMatch</span> <span style="color:#f92672">||</span> <span style="color:#a6e22e">lastModified</span>)) <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">false</span>;
+      <span style="color:#66d9ef">if</span>(<span style="color:#a6e22e">noneMatch</span> <span style="color:#f92672">&amp;&amp;</span> (<span style="color:#a6e22e">noneMatch</span> <span style="color:#f92672">!==</span> <span style="color:#a6e22e">resHeaders</span>[<span style="color:#e6db74">&#39;etag&#39;</span>])) <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">false</span>;
+      <span style="color:#66d9ef">if</span>(<span style="color:#a6e22e">lastModified</span> <span style="color:#f92672">&amp;&amp;</span> <span style="color:#a6e22e">lastModified</span> <span style="color:#f92672">!==</span> <span style="color:#a6e22e">resHeaders</span>[<span style="color:#e6db74">&#39;last-modified&#39;</span>]) <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">false</span>;
+      <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">true</span>;
+    }
+</code></pre></div><p>可以参考<a href="https://github.com/coderzzp/how2-learn-nodejs/tree/master/node-static-server">完整代码</a>，测试一下刚才所说过的强弱缓存的策略，同时也学习一下用node如何写一个带缓存的静态服务器</p>
+<pre><code>    我们在测试页面强缓存时不要用F5刷新，这样并不会命中强缓存，建议新开或者使用前后键来刷新页面 
+</code></pre>
+<p><a href="https://webmasters.stackexchange.com/questions/25342/headers-to-prevent-304-if-modified-since-head-requests">参考问题</a></p>
+<ul class="pa0">
+  
+</ul>
+<div class="mt6 instapaper_ignoref">
+      
+      
+      </div>
+    </div>
+
+    <aside class="w-30-l mt6-l">
+
+
+
+
+</aside>
+
+  </article>
+
+    </main>
+    <footer class="bg-black bottom-0 w-100 pa3" role="contentinfo">
+  <div class="flex justify-between">
+  <a class="f4 fw4 hover-white no-underline white-70 dn dib-ns pv2 ph3" href="https://coderzzp.github.io/blog/" >
+    &copy;  zzp的博客 2021 
+  </a>
+    <div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</div>
+  </div>
+</footer>
+
+  </body>
+</html>
